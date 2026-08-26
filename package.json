@@ -1,7 +1,7 @@
 {
   "name": "dsh-desktop",
   "productName": "DeepSeek Harness Desktop",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "DeepSeek Harness 桌面客户端 — 自动启动 dsh web 服务并以原生窗口展示",
   "main": "main.js",
   "author": "DSH user",
@@ -36,6 +36,7 @@
     "@deepseek-ai/dsh-workflow": "0.1.1-rc.2",
     "@linxin666/dsh-web-all": "0.3.4",
     "commander": "15.0.0",
+    "dsh-cost-meter": "1.6.2",
     "dsh-find-plugin": "0.3.7",
     "dshmarket": "1.29.2"
   },

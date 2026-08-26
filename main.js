@@ -41,7 +41,7 @@ function defaultConfig() {
     dshBin: null,
     nodeBin: null,
     minimizeToTray: true,
-    installPlugins: null, // null = 未决定（首次运行询问）；true/false = 用户选择
+    installPlugins: null, // null = 未决定（首启询问）；true=在线下载；"offline"=本地离线复制；false=跳过
     autoLaunch: false,    // 开机自启（打包环境写入 Windows 登录项）
   };
 }
@@ -181,28 +181,32 @@ async function bootServer(cfg) {
       const opts = {
         type: "question",
         title: "安装内置插件",
-        message: "是否安装客户端内置的插件？",
+        message: "将联网下载并安装内置插件到用户目录（约几十 MB），首次之后不再下载。",
         detail: [
-          "包含：Web UI 功能全家桶（@linxin666/dsh-web-all）、插件市场（dshmarket）、插件搜索（dsh-find-plugin）。",
-          "安装版客户端在安装向导中勾选；此为便携版 / 开发模式的首次运行询问。跳过不会影响已安装的插件。",
+          "包含：Web UI 功能全家桶（@linxin666/dsh-web-all）、插件市场（dshmarket）、插件搜索（dsh-find-plugin）、费用统计（dsh-cost-meter）。",
+          "在线下载（推荐）：使用内置 Node 的 pnpm 从 npm 联网安装，与插件市场 / 更新完全兼容。",
+          "本地离线插件：从安装包内置复制到用户目录，不联网；插件市场 / 更新能力可能受限。",
+          "跳过：不安装内置插件。",
         ].join("\n"),
-        buttons: ["安装（推荐）", "跳过"],
+        buttons: ["在线下载（推荐）", "使用本地离线插件", "跳过"],
         defaultId: 0,
-        cancelId: 1,
+        cancelId: 2,
         noLink: true,
       };
       const { response } =
         mainWindow && !mainWindow.isDestroyed()
           ? await dialog.showMessageBox(mainWindow, opts)
           : await dialog.showMessageBox(opts);
-      installPlugins = response === 0;
+      // true = 在线下载（pnpm）; "offline" = 本地离线复制; false = 跳过
+      installPlugins = response === 0 ? true : response === 1 ? "offline" : false;
       cfg.installPlugins = installPlugins;
       writeConfig(cfg);
     }
   }
   if (installPlugins !== false) {
     try {
-      dsh.ensurePlugins({ dshHome, nodeBin, onLine: log });
+      // offline 模式：不联网，直接用应用内置复制（allowInstall=false）。
+      dsh.ensurePlugins({ dshHome, nodeBin, allowInstall: installPlugins !== "offline", onLine: log });
     } catch (err) {
       log(`[plugins] error: ${err.message}\n`);
     }
@@ -272,7 +276,7 @@ async function bootServer(cfg) {
   // 服务已运行且目录有内容时不会重装（避免文件占用冲突）。
   if (installPlugins !== false) {
     try {
-      dsh.ensurePlugins({ dshHome, nodeBin, onLine: log });
+      dsh.ensurePlugins({ dshHome, nodeBin, allowInstall: installPlugins !== "offline", onLine: log });
     } catch (err) {
       log(`[plugins] re-check error: ${err.message}\n`);
     }
