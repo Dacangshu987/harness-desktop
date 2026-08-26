@@ -22,6 +22,7 @@ const {
   nativeImage,
   shell,
   dialog,
+  net,
 } = require("electron");
 const path = require("node:path");
 const os = require("node:os");
@@ -615,6 +616,122 @@ async function checkAndUpdateDsh() {
   if (info) await performDshUpdate(info.latest);
 }
 
+// ---- DSH-Desktop 更新 ------------------------------------------------------
+
+/** DSH-Desktop 的 GitHub 项目（用于发布新版本检测）。 */
+const DESKTOP_REPO = "Dacangshu987/harness-desktop";
+
+/** 用 Electron net（走系统 CA，兼容代理/MITM 环境）请求一个 URL 并解析 JSON。 */
+function httpGetJson(url) {
+  return new Promise((resolve) => {
+    let req;
+    try {
+      req = net.request(url);
+    } catch {
+      return resolve(null);
+    }
+    req.setHeader("User-Agent", "dsh-desktop-updater");
+    req.setHeader("Accept", "application/vnd.github+json");
+    req.on("response", (res) => {
+      let body = "";
+      res.on("data", (c) => (body += c));
+      res.on("end", () => {
+        try {
+          resolve(JSON.parse(body));
+        } catch {
+          resolve(null);
+        }
+      });
+    });
+    req.on("error", () => resolve(null));
+    req.end();
+  });
+}
+
+/** 简单 semver 比较（去 v 前缀，按数字段）。返回负数=小于，0=相等，正数=大于。 */
+function compareVersions(a, b) {
+  const pa = (a || "").replace(/^v/, "").split(".").map((n) => parseInt(n, 10) || 0);
+  const pb = (b || "").replace(/^v/, "").split(".").map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i++) {
+    if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0);
+  }
+  return 0;
+}
+
+/** 从 GitHub 获取 DSH-Desktop 最新发布版本号（失败/无发布返回 null，不弹窗）。 */
+async function getDesktopUpdate() {
+  try {
+    const json = await httpGetJson(`https://api.github.com/repos/${DESKTOP_REPO}/releases/latest`);
+    const latest = json && typeof json.tag_name === "string" ? json.tag_name.replace(/^v/, "") : null;
+    if (!latest) return null;
+    const current = app.getVersion();
+    if (compareVersions(latest, current) <= 0) return null;
+    return { current, latest };
+  } catch {
+    return null;
+  }
+}
+
+/** 静默检测 dsh 核心更新（不弹窗）。 */
+async function getDshUpdate() {
+  const current = dsh.currentDshVersion();
+  const latest = await dsh.fetchLatestDshVersion();
+  if (!current || !latest || current === latest) return null;
+  return { current, latest };
+}
+
+/** 手动菜单：检查 DSH-Desktop 更新（有/无更新都给反馈）。 */
+async function checkDesktopUpdate() {
+  const info = await getDesktopUpdate();
+  if (!info) {
+    const opts = {
+      type: "info",
+      title: "检查 DSH-Desktop 更新",
+      message: "当前已是最新版本",
+      detail: `当前版本：${app.getVersion()}`,
+    };
+    if (mainWindow && !mainWindow.isDestroyed()) await dialog.showMessageBox(mainWindow, opts);
+    else await dialog.showMessageBox(opts);
+    return;
+  }
+  const { response } = await dialog.showMessageBox(mainWindow, {
+    type: "info",
+    title: "发现 DSH-Desktop 新版本",
+    message: `发现新版本 ${info.latest}`,
+    detail: `当前版本：${info.current}\n是否打开 GitHub 下载页？`,
+    buttons: ["打开下载页", "稍后再说"],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+  });
+  if (response === 0) shell.openExternal(`https://github.com/${DESKTOP_REPO}/releases`);
+}
+
+/**
+ * 启动时静默检测一次：DSH-Desktop 与 dsh 核心。
+ * 没有新版本 → 完全不提示；有新版本 → 汇总提示一次。
+ */
+async function autoCheckUpdatesOnStartup() {
+  const [desktop, core] = await Promise.all([getDesktopUpdate(), getDshUpdate()]);
+  if (!desktop && !core) return;
+  const lines = [];
+  if (desktop) lines.push(`DSH-Desktop：${desktop.current} → ${desktop.latest}`);
+  if (core) lines.push(`dsh 核心：${core.current} → ${core.latest}`);
+  const { response } = await dialog.showMessageBox(mainWindow, {
+    type: "info",
+    title: "发现可用更新",
+    message: "检测到可用更新",
+    detail:
+      lines.join("\n") +
+      "\n\nDSH-Desktop 新版本请打开 GitHub 下载页；dsh 核心更新可在「检查 dsh 更新」中下载。",
+    buttons: desktop ? ["打开下载页", "稍后再说"] : ["稍后再说"],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+  });
+  if (desktop && response === 0) shell.openExternal(`https://github.com/${DESKTOP_REPO}/releases`);
+}
+
 // ---- 强制刷新 -------------------------------------------------------------
 
 function forceRefresh() {
@@ -802,6 +919,7 @@ function refreshTrayMenu(workspace) {
     { label: "重启 DSH 服务", click: () => restartServer(readConfig()) },
     { label: `远程访问: ${isRemoteAccessOn() ? "✓ 开启" : " 关闭"}`, click: async () => { await toggleRemoteAccess(); refreshTrayMenu(workspace); buildApplicationMenu(readConfig()); } },
     { label: `开机自启: ${isAutoLaunchOn() ? "✓ 开启" : " 关闭"}`, click: async () => { await toggleAutoLaunch(); refreshTrayMenu(workspace); buildApplicationMenu(readConfig()); } },
+    { label: "检查 DSH-Desktop 更新", click: () => { checkDesktopUpdate(); } },
     { label: "检查 dsh 更新", click: () => { checkAndUpdateDsh(); } },
     { label: "检查 / 安装 Node.js", click: () => { checkNode(readConfig()); } },
     { label: "打开工作区文件夹", enabled: !!workspace, click: () => { if (workspace) shell.openPath(workspace); } },
@@ -825,6 +943,7 @@ function buildApplicationMenu(cfg) {
         { label: "强制刷新", accelerator: "CmdOrCtrl+Shift+R", click: forceRefresh },
         { type: "separator" },
         { label: "重启 DSH 服务", click: () => restartServer(cfg) },
+        { label: "检查 DSH-Desktop 更新", click: () => { checkDesktopUpdate(); } },
         { label: "检查 dsh 更新", click: () => { checkAndUpdateDsh(); } },
         { label: "远程访问", type: "checkbox", checked: isRemoteAccessOn(), click: async () => { await toggleRemoteAccess(); buildApplicationMenu(readConfig()); refreshTrayMenu(cfg.workspace); } },
         { label: "开机自启", type: "checkbox", checked: isAutoLaunchOn(), click: async () => { await toggleAutoLaunch(); buildApplicationMenu(readConfig()); refreshTrayMenu(cfg.workspace); } },
@@ -908,6 +1027,9 @@ if (!app.requestSingleInstanceLock()) {
       if (mainWindow) { mainWindow.show(); mainWindow.focus(); }
       else mainWindow = createWindow(serverPort);
     });
+
+    // 启动后静默检测一次更新（DSH-Desktop + dsh 核心），没有新版本不提示。
+    setTimeout(() => { autoCheckUpdatesOnStartup(); }, 8000);
   });
 }
 
