@@ -8,5 +8,5 @@
 const { contextBridge } = require("electron");
 
 contextBridge.exposeInMainWorld("dshDesktop", {
-  version: process.env.DSH_CLIENT_VERSION ?? "0.3.2",
+  version: process.env.DSH_CLIENT_VERSION ?? "0.3.3",
 });
